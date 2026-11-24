@@ -578,7 +578,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
         <form id="register-form" class="auth-form hidden">
           <label class="field">
             <span>用户名</span>
-            <input id="reg-username" type="text" placeholder="3–20 个字符" autocomplete="username" />
+            <input id="reg-username" type="text" placeholder="2–20 个字符" autocomplete="username" />
           </label>
           <div class="field-row">
             <label class="field">
@@ -1093,6 +1093,8 @@ window.FORUM_CONFIG = {
       const btn = event.submitter;
       if (btn) { btn.disabled = true; btn.textContent = '正在注册…'; }
       try {
+        const { data: existing } = await sb.from('public_profiles').select('id').eq('username', username).limit(1);
+        if (existing?.length) throw new Error('这个用户名已经被注册了，换一个。');
         const { data: valid, error: validError } = await sb.rpc('validate_invite_code', { p_code: invite });
         if (validError) throw validError;
         if (!valid) throw new Error('邀请码无效、已用完或已过期。');
@@ -1109,7 +1111,10 @@ window.FORUM_CONFIG = {
         await bootApp();
       } catch (e) {
         const msg = String(e?.message || e || '');
-        showError(errEl, msg.includes('invite_code') ? '邀请码无效、已用完或已过期。' : `注册失败：${msg.slice(0, 160)}`);
+        const friendly = msg.includes('invite_code') ? '邀请码无效、已用完或已过期。'
+          : msg.includes('profiles_username_lower_idx') || msg.includes('duplicate key') ? '这个用户名已经被注册了，换一个。'
+          : `注册失败：${msg.slice(0, 160)}`;
+        showError(errEl, friendly);
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = '注册并进入'; }
       }
