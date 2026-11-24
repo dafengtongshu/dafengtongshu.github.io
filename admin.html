@@ -920,7 +920,7 @@ window.FORUM_CONFIG = {
     const session = await getSession();
     if (!session) return null;
     const { data, error } = await sb.from('profiles')
-      .select('id,username,email,role,status,site_role_id,invited_code_id,created_at,last_seen_at')
+      .select('id,username,email,role,status,site_role_id,invited_code_id,muted_until,created_at,last_seen_at')
       .eq('id', session.user.id)
       .maybeSingle();
     if (error) throw error;
@@ -1088,17 +1088,19 @@ window.FORUM_CONFIG = {
   }
 
   async function refreshCounts() {
-    const [posts, comments, channels, users, invites, reports] = await Promise.all([
+    const [posts, comments, channels, users, invites, reports, autoBlocked] = await Promise.all([
       sb.from('posts').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       sb.from('comments').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       sb.from('channels').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       sb.from('profiles').select('id', { count: 'exact', head: true }),
       sb.from('invite_codes').select('id', { count: 'exact', head: true }).eq('status', 'active'),
-      sb.from('reports').select('id', { count: 'exact', head: true }).eq('status', 'pending')
+      sb.from('reports').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      sb.from('admin_audit_logs').select('id', { count: 'exact', head: true }).in('action', ['auto.posts.block', 'auto.comments.block'])
     ]);
     state.counts = {
       pendingPosts: posts.count || 0, pendingComments: comments.count || 0, pendingChannels: channels.count || 0,
-      users: users.count || 0, activeInvites: invites.count || 0, reports: reports.count || 0
+      users: users.count || 0, activeInvites: invites.count || 0, reports: reports.count || 0,
+      autoBlocked: autoBlocked.count || 0
     };
     const badge = $('#admin-pending-count');
     const total = state.counts.pendingPosts + state.counts.pendingComments + state.counts.pendingChannels;
@@ -1140,18 +1142,18 @@ window.FORUM_CONFIG = {
     await refreshCounts();
     const counts = state.counts;
     const page = $('#admin-page');
-    page.innerHTML = `${head('OVERVIEW / 概览', '今天，风往哪边吹。', '先把待审的内容处理掉，再决定下一步。', `<button class="primary-btn" data-admin-tab="review" type="button">去审核</button>`)}
+    page.innerHTML = `${head('OVERVIEW / 概览', '今天，风往哪边吹。', '日常内容已交给词库自动处理；你只需要看举报和异常。', `<button class="primary-btn" data-admin-tab="review" type="button">看异常队列</button>`)}
       <div class="admin-grid">
-        <div class="stat-card hot"><div class="stat-label">待审帖子</div><div class="stat-value">${counts.pendingPosts}</div><div class="stat-note">发布前先到你这里</div></div>
-        <div class="stat-card"><div class="stat-label">待审评论</div><div class="stat-value">${counts.pendingComments}</div><div class="stat-note">和帖子分开审</div></div>
-        <div class="stat-card"><div class="stat-label">待审频道</div><div class="stat-value">${counts.pendingChannels}</div><div class="stat-note">频道通过后才公开</div></div>
+        <div class="stat-card hot"><div class="stat-label">自动拦截</div><div class="stat-value">${counts.autoBlocked}</div><div class="stat-note">累计命中词库并删除</div></div>
+        <div class="stat-card"><div class="stat-label">待审异常</div><div class="stat-value">${counts.pendingPosts + counts.pendingComments}</div><div class="stat-note">正常情况下应为 0</div></div>
+        <div class="stat-card"><div class="stat-label">待审频道</div><div class="stat-value">${counts.pendingChannels}</div><div class="stat-note">频道仍由你决定</div></div>
         <div class="stat-card"><div class="stat-label">注册用户</div><div class="stat-value">${counts.users}</div><div class="stat-note">必须持邀请码注册</div></div>
       </div>
       <div class="admin-section" style="margin-top:18px">
-        <div class="admin-section-head"><h2>待办</h2><span class="muted-line">越靠前越急</span></div>
+        <div class="admin-section-head"><h2>待办</h2><span class="muted-line">自动审核已接管日常内容</span></div>
         <div class="admin-card"><div class="admin-card-body">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--admin-line)"><div><div class="stat-label">待审帖子</div><div class="muted-line" style="margin-top:3px">所有内容先审后发</div></div><div style="display:flex;align-items:center;gap:10px"><strong style="font-family:var(--serif);font-size:20px">${counts.pendingPosts}</strong><button class="text-btn" data-admin-tab="review" type="button">处理 →</button></div></div>
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--admin-line)"><div><div class="stat-label">待审评论</div><div class="muted-line" style="margin-top:3px">评论也不直接公开</div></div><div style="display:flex;align-items:center;gap:10px"><strong style="font-family:var(--serif);font-size:20px">${counts.pendingComments}</strong><button class="text-btn" data-admin-tab="review" type="button">处理 →</button></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--admin-line)"><div><div class="stat-label">待审帖子</div><div class="muted-line" style="margin-top:3px">仅剩人工退回或异常</div></div><div style="display:flex;align-items:center;gap:10px"><strong style="font-family:var(--serif);font-size:20px">${counts.pendingPosts}</strong><button class="text-btn" data-admin-tab="review" type="button">处理 →</button></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--admin-line)"><div><div class="stat-label">待审评论</div><div class="muted-line" style="margin-top:3px">仅剩人工退回或异常</div></div><div style="display:flex;align-items:center;gap:10px"><strong style="font-family:var(--serif);font-size:20px">${counts.pendingComments}</strong><button class="text-btn" data-admin-tab="review" type="button">处理 →</button></div></div>
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0"><div><div class="stat-label">待审频道</div><div class="muted-line" style="margin-top:3px">通过后才出现在用户端</div></div><div style="display:flex;align-items:center;gap:10px"><strong style="font-family:var(--serif);font-size:20px">${counts.pendingChannels}</strong><button class="text-btn" data-admin-tab="review" type="button">处理 →</button></div></div>
         </div></div>
       </div>
@@ -1160,7 +1162,7 @@ window.FORUM_CONFIG = {
         <div class="admin-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
           <button class="admin-card" data-admin-tab="invites" type="button" style="text-align:left;cursor:pointer"><div class="admin-card-body"><div class="stat-label">邀请码</div><div class="stat-value" style="font-size:22px">${counts.activeInvites}</div><div class="stat-note">当前可用</div></div></button>
           <button class="admin-card" data-admin-tab="users" type="button" style="text-align:left;cursor:pointer"><div class="admin-card-body"><div class="stat-label">用户与角色</div><div class="stat-value" style="font-size:22px">${counts.users}</div><div class="stat-note">分配徽章和权限</div></div></button>
-          <button class="admin-card" data-admin-tab="rules" type="button" style="text-align:left;cursor:pointer"><div class="admin-card-body"><div class="stat-label">检测规则</div><div class="stat-value" style="font-size:22px">本地</div><div class="stat-note">不接付费 API</div></div></button>
+          <button class="admin-card" data-admin-tab="rules" type="button" style="text-align:left;cursor:pointer"><div class="admin-card-body"><div class="stat-label">检测规则</div><div class="stat-value" style="font-size:22px">自动</div><div class="stat-note">命中即删除并处理账号</div></div></button>
         </div>
       </div>`;
     refreshCounts().catch(() => {});
@@ -1193,7 +1195,7 @@ window.FORUM_CONFIG = {
       items = data || [];
     }
     const page = $('#admin-page');
-    page.innerHTML = `${head('REVIEW / 审核队列', '过一遍，再放行。', '帖子、评论、频道都在这里。拒绝时要写原因。', `<button class="ghost-btn" data-admin-tab="overview" type="button">回概览</button>`)}
+    page.innerHTML = `${head('REVIEW / 审核队列', '只处理异常，不再逐条过。', '帖子/评论命中词库会自动删除并处理账号；这里只保留人工退回、频道审核等异常。', `<button class="ghost-btn" data-admin-tab="overview" type="button">回概览</button>`)}
       <div class="admin-toolbar">
         <button class="admin-filter-btn ${type === 'posts' ? 'active' : ''}" data-admin-review-type="posts" type="button">帖子 ${state.counts.pendingPosts}</button>
         <button class="admin-filter-btn ${type === 'comments' ? 'active' : ''}" data-admin-review-type="comments" type="button">评论 ${state.counts.pendingComments}</button>
@@ -1291,7 +1293,7 @@ window.FORUM_CONFIG = {
   // ---------- users ----------
   async function renderUsers() {
     const { data } = await sb.from('profiles')
-      .select('id,username,email,role,status,site_role_id,invited_code_id,created_at')
+      .select('id,username,email,role,status,site_role_id,invited_code_id,muted_until,created_at')
       .order('created_at', { ascending: false }).limit(200);
     let users = data || [];
     if (state.userQuery) {
@@ -1305,12 +1307,15 @@ window.FORUM_CONFIG = {
       ${users.length ? users.map((u) => {
         const r = state.roleMap.get(u.site_role_id) || { name: '普通用户', id: '', badge_text: '普通用户' };
         const isMe = u.id === state.me.id;
+        const muted = u.muted_until && new Date(u.muted_until) > new Date();
+        const statusLabel = u.status === 'banned' ? '已封禁' : muted ? `禁言至 ${new Date(u.muted_until).toLocaleDateString('zh-CN')}` : '正常';
+        const statusClass = u.status === 'banned' ? 'bad' : muted ? 'warn' : '';
         return `<tr><td><div class="user-cell">${avatarHtml(u.username, 'sm')}<div><strong>${safe(u.username)}</strong><div class="sub">ID ${safe(String(u.id).slice(0, 8))}</div></div></div></td>
           <td class="muted-line">${safe(u.email || '—')}</td>
           <td><span class="badge ${r.name === '站主' ? 'owner' : r.name === '官方管理员' ? 'official' : 'custom'}">${safe(r.badge_text || r.name)}</span></td>
-          <td><span class="status-chip ${u.status === 'banned' ? 'bad' : u.status === 'active' ? '' : 'warn'}">${safe(u.status === 'active' ? '正常' : u.status === 'banned' ? '已封禁' : u.status)}</span></td>
+          <td><span class="status-chip ${statusClass}">${safe(statusLabel)}</span></td>
           <td class="muted-line">${safe(new Date(u.created_at).toLocaleDateString('zh-CN'))}</td>
-          <td><div class="admin-actions">${state.roles.length ? `<select data-admin-action="role-change" data-id="${safe(u.id)}" ${can('site.role.manage') ? '' : 'disabled'}>${state.roles.map((x) => `<option value="${safe(x.id)}" ${x.id === u.site_role_id ? 'selected' : ''}>${safe(x.name)}</option>`).join('')}</select>` : ''}${isMe ? '<span class="muted-line">当前账号</span>' : `<button class="ghost-btn ${u.status === 'active' ? 'danger-link' : ''}" data-admin-action="${u.status === 'active' ? 'ban' : 'unban'}" data-id="${safe(u.id)}" type="button" ${can('site.user.ban') ? '' : 'disabled'}>${u.status === 'active' ? '封禁' : '恢复'}</button>`}</div></td></tr>`;
+          <td><div class="admin-actions">${state.roles.length ? `<select data-admin-action="role-change" data-id="${safe(u.id)}" ${can('site.role.manage') ? '' : 'disabled'}>${state.roles.map((x) => `<option value="${safe(x.id)}" ${x.id === u.site_role_id ? 'selected' : ''}>${safe(x.name)}</option>`).join('')}</select>` : ''}${isMe ? '<span class="muted-line">当前账号</span>' : `<button class="ghost-btn ${u.status === 'banned' || muted ? '' : 'danger-link'}" data-admin-action="${u.status === 'banned' || muted ? 'unban' : 'ban'}" data-id="${safe(u.id)}" type="button" ${can('site.user.ban') ? '' : 'disabled'}>${u.status === 'banned' ? '恢复' : muted ? '解除禁言' : '封禁'}</button>`}</div></td></tr>`;
       }).join('') : '<tr><td colspan="6" class="admin-empty">没有匹配的用户。</td></tr>'}
       </tbody></table></div></div>
       <div class="admin-section" style="margin-top:22px"><div class="admin-section-head"><h2>当前角色</h2><span class="muted-line">角色名称与徽章都由站主定义</span></div><div class="admin-card"><div class="admin-card-body"><div style="display:flex;flex-wrap:wrap;gap:8px">${state.roles.map((r) => `<span class="badge ${r.name === '站主' ? 'owner' : r.name === '官方管理员' ? 'official' : 'custom'}">${safe(r.badge_text || r.name)}</span>`).join('')}</div></div></div></div>`;
@@ -1439,35 +1444,50 @@ window.FORUM_CONFIG = {
 
   // ---------- rules ----------
   async function renderRules() {
-    const { data } = await sb.from('moderation_rules').select('id,pattern,category,risk_level,enabled,created_at').order('created_at', { ascending: false }).limit(100);
+    const { data } = await sb.from('moderation_rules').select('id,pattern,category,risk_level,action,mute_days,enabled,created_at').order('created_at', { ascending: false }).limit(100);
     const rules = data || [];
+    const actionLabel = (r) => r.action === 'ban' ? '直接封号' : r.action === 'none' ? '只删内容' : `禁言 ${r.mute_days || 7} 天`;
     const page = $('#admin-page');
-    page.innerHTML = `${head('RULES / 检测规则', '先把明显的拦住。', '本地正则规则，命中只打标签，不自动放行；不接付费 API。', '')}
+    page.innerHTML = `${head('RULES / 检测规则', '让词库先干活。', '命中即删除内容，并可按规则封号或禁言；未命中直接发布，不再需要逐条人工审核。', '')}
       <div class="admin-card" style="margin-bottom:18px"><div class="admin-card-body">
-        <form id="rule-form" style="display:grid;grid-template-columns:1.2fr 1fr .8fr auto;gap:9px;align-items:end">
-          <label class="field"><span>匹配词/正则</span><input id="rule-pattern" placeholder="例如：加微信" maxlength="120" /></label>
+        <form id="rule-form" style="display:grid;grid-template-columns:1.2fr 1fr .8fr 1fr auto;gap:9px;align-items:end">
+          <label class="field"><span>匹配词</span><input id="rule-pattern" placeholder="例如：加微信" maxlength="120" /></label>
           <label class="field"><span>分类</span><input id="rule-category" placeholder="例如：站外引流" maxlength="40" /></label>
           <label class="field"><span>风险</span><select id="rule-level"><option value="high">高</option><option value="medium" selected>中</option><option value="low">低</option></select></label>
+          <label class="field"><span>命中处理</span><select id="rule-action"><option value="mute" selected>禁言 7 天</option><option value="ban">直接封号</option><option value="none">只删内容</option></select></label>
           <button class="primary-btn" type="submit">添加规则</button>
         </form>
       </div></div>
-      <div class="admin-card"><div class="table-wrap"><table class="admin-table"><thead><tr><th>匹配内容</th><th>分类</th><th>风险</th><th>状态</th><th>创建时间</th></tr></thead><tbody>
-      ${rules.length ? rules.map((r) => `<tr><td class="code-text">${safe(r.pattern)}</td><td>${safe(r.category)}</td><td><span class="status-chip ${r.risk_level === 'high' ? 'bad' : 'warn'}">${safe(r.risk_level)}</span></td><td>${r.enabled ? '<span class="status-chip">启用</span>' : '<span class="status-chip warn">停用</span>'}</td><td class="muted-line">${safe(new Date(r.created_at).toLocaleDateString('zh-CN'))}</td></tr>`).join('') : '<tr><td colspan="5" class="admin-empty">还没有规则。</td></tr>'}
+      <div class="admin-card"><div class="table-wrap"><table class="admin-table"><thead><tr><th>匹配内容</th><th>分类</th><th>风险</th><th>命中处理</th><th>状态</th><th>创建时间</th></tr></thead><tbody>
+      ${rules.length ? rules.map((r) => `<tr><td class="code-text">${safe(r.pattern)}</td><td>${safe(r.category)}</td><td><span class="status-chip ${r.risk_level === 'high' ? 'bad' : 'warn'}">${safe(r.risk_level)}</span></td><td><select class="rule-action-select" data-id="${safe(r.id)}" style="min-width:120px"><option value="mute"${r.action === 'mute' ? ' selected' : ''}>禁言 ${r.mute_days || 7} 天</option><option value="ban"${r.action === 'ban' ? ' selected' : ''}>直接封号</option><option value="none"${r.action === 'none' ? ' selected' : ''}>只删内容</option></select></td><td>${r.enabled ? '<span class="status-chip">启用</span>' : '<span class="status-chip warn">停用</span>'}</td><td class="muted-line">${safe(new Date(r.created_at).toLocaleDateString('zh-CN'))}</td></tr>`).join('') : '<tr><td colspan="6" class="admin-empty">还没有规则。</td></tr>'}
       </tbody></table></div></div>`;
+    $$('.rule-action-select').forEach((sel) => sel.addEventListener('change', async () => {
+      const id = sel.dataset.id;
+      const action = sel.value;
+      sel.disabled = true;
+      const { error } = await sb.from('moderation_rules').update({ action }).eq('id', id);
+      sel.disabled = false;
+      if (error) return toast(`修改失败：${error.message}`.slice(0, 160), 'error');
+      toast(`命中处理已改为：${actionLabel({ action, mute_days: 7 })}。`, 'good');
+    }));
     $('#rule-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const pattern = String($('#rule-pattern')?.value || '').trim();
       const category = String($('#rule-category')?.value || '').trim() || '敏感';
       const risk = $('#rule-level')?.value || 'medium';
+      const action = $('#rule-action')?.value || 'mute';
       if (!pattern) return toast('先写匹配内容。', 'error');
       const btn = event.submitter;
       if (btn) { btn.disabled = true; btn.textContent = '添加中…'; }
       try {
-        const { error } = await sb.from('moderation_rules').insert({ pattern, category, risk_level: risk, enabled: true, created_by: state.me.id });
+        const { error } = await sb.from('moderation_rules').insert({ pattern, category, risk_level: risk, action, mute_days: 7, enabled: true, created_by: state.me.id });
         if (error) throw error;
-        toast('规则已添加。', 'good');
+        toast('规则已添加，立即生效。', 'good');
         await renderRules();
-      } catch (e) { toast(`添加失败：${e.message}`.slice(0, 160), 'error'); }
+      } catch (e) {
+        const msg = String(e.message || '');
+        toast(`${msg.includes('duplicate') ? '这个词已经存在了。' : `添加失败：${msg}`}`.slice(0, 160), 'error');
+      }
       finally { if (btn) { btn.disabled = false; btn.textContent = '添加规则'; } }
     });
   }

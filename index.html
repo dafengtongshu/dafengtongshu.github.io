@@ -557,7 +557,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
       <div class="auth-panel-inner">
         <div class="auth-head">
           <div class="auth-logo">大风吹倒梧桐树</div>
-          <div class="auth-sub">站主审核 · 邀请码注册</div>
+          <div class="auth-sub">自动审核 · 邀请码注册</div>
         </div>
         <div class="auth-tabs" role="tablist">
           <button id="tab-login" class="auth-tab active" type="button">登录</button>
@@ -672,7 +672,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
       </div>
       <div class="right-card site-note">
         <div class="note-kicker">SITE NOTE</div>
-        <p>所有内容先审后发。慢一点，也没关系。</p>
+        <p>内容自动检测，命中规则即删除。慢一点，也没关系。</p>
         <div class="note-sign">— 站主</div>
       </div>
       <div class="right-foot">
@@ -711,7 +711,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
       <div class="modal-head">
         <div>
           <div class="modal-title">写点什么</div>
-          <div class="modal-sub">发布后先进入审核，通过后才会公开</div>
+          <div class="modal-sub">发布即公开；命中站内规则会被自动删除并处理账号</div>
         </div>
         <button class="icon-btn" data-close="compose" type="button" aria-label="关闭">
           <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
@@ -728,7 +728,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
           <input id="compose-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
           <span id="compose-count" class="count">0 / 1000</span>
         </div>
-        <button id="compose-submit" class="primary-btn" type="button">提交审核</button>
+        <button id="compose-submit" class="primary-btn" type="button">发布</button>
       </div>
       <div id="compose-preview" class="compose-preview hidden"></div>
     </div>
@@ -931,7 +931,7 @@ window.FORUM_CONFIG = {
     const session = await getSession();
     if (!session) return null;
     const { data, error } = await sb.from('profiles')
-      .select('id,username,email,role,status,site_role_id,invited_code_id,created_at,last_seen_at')
+      .select('id,username,email,role,status,site_role_id,invited_code_id,muted_until,created_at,last_seen_at')
       .eq('id', session.user.id)
       .maybeSingle();
     if (error) throw error;
@@ -1037,6 +1037,17 @@ window.FORUM_CONFIG = {
   const role = () => state.roleMap.get(state.me?.site_role_id) || { name: '普通用户', badge_text: '普通用户', permissions: [] };
   const roleOf = (profile) => state.roleMap.get(profile?.site_role_id) || { name: '普通用户', badge_text: '普通用户' };
   const isOwner = () => role().name === '站主' || roleHas(role(), 'site.owner');
+  const mutedUntil = () => {
+    if (!state.me?.muted_until) return null;
+    const t = new Date(state.me.muted_until);
+    return Number.isNaN(t.getTime()) || t <= new Date() ? null : t;
+  };
+  function ensureNotMuted() {
+    const until = mutedUntil();
+    if (!until) return true;
+    toast(`你已被禁言，解除时间：${until.toLocaleString('zh-CN')}`, 'error');
+    return false;
+  }
 
   // ---------- auth ----------
   function showAuth() {
@@ -1281,11 +1292,11 @@ window.FORUM_CONFIG = {
     const posts = state.lobbyFilter === 'mine'
       ? await fetchPosts({ mine: true, authorId: state.me.id })
       : await fetchPosts({ status: 'approved' });
-    $('#page').innerHTML = `${pageHead('LOBBY / 大厅', '大厅', '大家正在这里说话。所有内容先审后发。', `<button class="primary-btn" data-action="compose-lobby" type="button">写点什么</button>`)}
+    $('#page').innerHTML = `${pageHead('LOBBY / 大厅', '大厅', '大家正在这里说话。命中规则的内容会自动删除，其余直接发布。', `<button class="primary-btn" data-action="compose-lobby" type="button">写点什么</button>`)}
       <div class="feed"><div class="feed-tabs">
         <button class="feed-tab ${state.lobbyFilter === 'latest' ? 'active' : ''}" data-action="lobby-filter" data-filter="latest" type="button">最新</button>
-        <button class="feed-tab ${state.lobbyFilter === 'mine' ? 'active' : ''}" data-action="lobby-filter" data-filter="mine" type="button">我的待审</button>
-      </div>${posts.length ? posts.map((p) => postHtml(p, state.lobbyFilter === 'mine')).join('') : empty('风', state.lobbyFilter === 'mine' ? '你还没有待审核的内容' : '大厅还很安静', state.lobbyFilter === 'mine' ? '写点什么，提交后会先到站主那里。' : '成为第一个说话的人。')}</div>`;
+        <button class="feed-tab ${state.lobbyFilter === 'mine' ? 'active' : ''}" data-action="lobby-filter" data-filter="mine" type="button">我的发布</button>
+      </div>${posts.length ? posts.map((p) => postHtml(p, state.lobbyFilter === 'mine')).join('') : empty('风', state.lobbyFilter === 'mine' ? '你还没有发布内容' : '大厅还很安静', state.lobbyFilter === 'mine' ? '写点什么，发布后会立即出现在这里。' : '成为第一个说话的人。')}</div>`;
   }
 
   function channelRow(c) {
@@ -1451,24 +1462,33 @@ window.FORUM_CONFIG = {
         ${post._imageUrl ? `<div class="post-image"><img src="${safe(post._imageUrl)}" alt="帖子图片" /></div>` : ''}
         <div class="post-actions" style="margin-top:8px"><button class="action-btn ${post._liked ? 'liked' : ''}" data-action="like" data-id="${safe(post.id)}" type="button">${icon('heart')}<span>${post._likeCount || ''}</span></button><button class="action-btn" data-action="report" data-type="post" data-id="${safe(post.id)}" type="button">${icon('flag')}<span>举报</span></button></div>
       </div><div class="detail-rule"></div>
-      <div class="comment-list"><div class="section-head" style="padding:18px 0 7px"><div><h2 style="font-size:16px">讨论 ${comments?.length ? `<span class="muted-line">${comments.length}</span>` : ''}</h2><div class="muted-line">评论也需要先审后发。</div></div></div>
+      <div class="comment-list"><div class="section-head" style="padding:18px 0 7px"><div><h2 style="font-size:16px">讨论 ${comments?.length ? `<span class="muted-line">${comments.length}</span>` : ''}</h2><div class="muted-line">评论发布后自动检测，命中规则会被删除。</div></div></div>
       ${(comments || []).length ? comments.map((c) => {
         const ca = authors.get(c.author_id) || { username: '未知用户' };
         return `<div class="comment">${avatarHtml(ca.username, 'sm')}<div class="comment-body"><div class="comment-meta"><span class="post-name">${safe(ca.username)}</span>${roleBadge(roleOf(ca))}<span>·</span><span>${safe(timeAgo(c.created_at))}</span>${c.status !== 'approved' ? `<span class="post-status">${safe(c.status === 'rejected' ? '未通过' : '待审核')}</span>` : ''}</div><p class="comment-text">${safe(c.content)}</p></div></div>`;
       }).join('') : '<div class="muted-line" style="padding:13px 0 20px">还没有公开的评论，来写第一条吧。</div>'}
       </div>
-      ${post.status === 'approved' ? `<form id="comment-form" class="comment-form"><textarea id="comment-text" maxlength="500" placeholder="写一条评论…"></textarea><p class="comment-form-note">提交后先进入审核，通过后公开。</p><button class="primary-btn" type="submit">提交评论</button></form>` : ''}`;
+      ${post.status === 'approved' ? `<form id="comment-form" class="comment-form"><textarea id="comment-text" maxlength="500" placeholder="写一条评论…"></textarea><p class="comment-form-note">发布后自动检测，命中规则会被删除。</p><button class="primary-btn" type="submit">发布评论</button></form>` : ''}`;
     $('#comment-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (!ensureNotMuted()) return;
       const content = String($('#comment-text')?.value || '').trim();
       if (!content) return toast('先写点什么。', 'error');
       const btn = event.submitter;
-      if (btn) { btn.disabled = true; btn.textContent = '提交中…'; }
-      const { error } = await sb.from('comments').insert({ post_id: post.id, author_id: state.me.id, content, status: 'pending' });
-      if (btn) { btn.disabled = false; btn.textContent = '提交评论'; }
-      if (error) return toast(`评论提交失败：${error.message}`.slice(0, 160), 'error');
+      if (btn) { btn.disabled = true; btn.textContent = '发布中…'; }
+      const { data, error } = await sb.from('comments').insert({ post_id: post.id, author_id: state.me.id, content, status: 'pending' })
+        .select('id,status,reject_reason').maybeSingle();
+      if (btn) { btn.disabled = false; btn.textContent = '发布评论'; }
+      if (error) return toast(`评论发布失败：${error.message}`.slice(0, 160), 'error');
+      if (!data || data.status !== 'approved') {
+        state.me = await getMyProfile().catch(() => state.me);
+        toast((data?.reject_reason || '评论命中自动规则，已删除；账号已按规则处理。').slice(0, 200), 'error');
+        await refreshCurrent();
+        return;
+      }
       $('#comment-text').value = '';
-      toast('评论已提交审核。', 'good');
+      toast('评论已发布。', 'good');
+      await refreshCurrent();
     });
   }
 
@@ -1486,6 +1506,7 @@ window.FORUM_CONFIG = {
     $('#page').innerHTML = `<div class="profile-hero"><div class="profile-top">${avatarHtml(state.me.username, 'lg')}
       <div class="profile-main"><div class="profile-name"><h1>${safe(state.me.username)}</h1>${roleBadge(role())}</div>
         <div class="profile-handle">${safe(state.me.email || '未填写展示邮箱')} · 加入于 ${safe(new Date(state.me.created_at).toLocaleDateString('zh-CN'))}</div>
+        ${mutedUntil() ? `<div class="profile-handle" style="color:#b42318;margin-top:6px">已被禁言 · 解除时间 ${safe(mutedUntil().toLocaleString('zh-CN'))}</div>` : ''}
         <div class="profile-stat-row"><span><strong>${posts.length}</strong> 内容</span><span><strong>${comments.length}</strong> 评论</span><span><strong>${safe(roleName(role()))}</strong> 身份</span></div></div>
       <div class="profile-actions"><button class="ghost-btn" id="logout-btn" type="button">退出</button></div></div></div>
       <div class="profile-tabs"><button class="profile-tab ${tab === 'posts' ? 'active' : ''}" data-action="profile-tab" data-tab="posts" type="button">我的内容</button><button class="profile-tab ${tab === 'comments' ? 'active' : ''}" data-action="profile-tab" data-tab="comments" type="button">我的评论</button></div>
@@ -1533,6 +1554,7 @@ window.FORUM_CONFIG = {
 
   // ---------- compose ----------
   function openCompose(scope = 'lobby', channel = null) {
+    if (!ensureNotMuted()) return;
     state.compose = { scope, channelId: channel?.id || null, channelName: channel?.name || '', imageFile: null, imageUrl: '' };
     const context = $('#compose-context');
     if (context) context.innerHTML = scope === 'channel' && channel ? `发布到 <strong>#${safe(channel.name)}</strong>` : '发布到 <strong>大厅</strong>';
@@ -1548,15 +1570,16 @@ window.FORUM_CONFIG = {
     const preview = $('#compose-preview');
     if (!preview) return;
     if (!state.compose.imageUrl) { preview.innerHTML = ''; preview.classList.add('hidden'); return; }
-    preview.innerHTML = `<img src="${state.compose.imageUrl}" alt="待上传图片" /><div class="muted-line" style="font-size:11px">图片会随帖子一起提交审核</div><button class="remove-img" type="button">移除</button>`;
+    preview.innerHTML = `<img src="${state.compose.imageUrl}" alt="待上传图片" /><div class="muted-line" style="font-size:11px">图片会随帖子一起发布，并经过自动规则检测</div><button class="remove-img" type="button">移除</button>`;
     preview.classList.remove('hidden');
   }
   async function submitCompose() {
+    if (!ensureNotMuted()) return;
     const content = String($('#compose-text')?.value || '').trim();
     if (!content && !state.compose.imageFile) return toast('先写点什么，或加一张图片。', 'error');
     if (content.length > 1000) return toast('内容超过 1000 字。', 'error');
     const btn = $('#compose-submit');
-    if (btn) { btn.disabled = true; btn.textContent = '提交中…'; }
+    if (btn) { btn.disabled = true; btn.textContent = '发布中…'; }
     try {
       let imagePath = null;
       if (state.compose.imageFile) {
@@ -1570,16 +1593,21 @@ window.FORUM_CONFIG = {
       const { data, error } = await sb.from('posts').insert({
         scope: state.compose.scope, channel_id: state.compose.channelId, author_id: state.me.id,
         content, image_path: imagePath, status: 'pending'
-      }).select('id,status,risk_level,risk_labels').maybeSingle();
+      }).select('id,status,risk_level,risk_labels,reject_reason').maybeSingle();
       if (error) throw error;
-      const risk = data?.risk_labels?.length ? `系统标记：${data.risk_labels.join('、')}。` : '';
       closeModal('compose');
-      toast(`已提交审核。${risk}`.trim(), 'good');
+      if (!data || data.status !== 'approved') {
+        state.me = await getMyProfile().catch(() => state.me);
+        toast((data?.reject_reason || '内容命中自动规则，已删除；账号已按规则处理。').slice(0, 200), 'error');
+        await refreshCurrent();
+        return;
+      }
+      toast('已发布。', 'good');
       await refreshCurrent();
     } catch (e) {
-      toast(String(e?.message || '提交失败').slice(0, 160), 'error');
+      toast(String(e?.message || '发布失败').slice(0, 160), 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '提交审核'; }
+      if (btn) { btn.disabled = false; btn.textContent = '发布'; }
     }
   }
 
