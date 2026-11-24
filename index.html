@@ -1614,6 +1614,7 @@ window.FORUM_CONFIG = {
   // ---------- channel ----------
   async function createChannel(event) {
     event.preventDefault();
+    if (!ensureNotMuted()) return;
     const name = String($('#ch-name')?.value || '').trim();
     const slug = String($('#ch-slug')?.value || '').trim().toLowerCase();
     const description = String($('#ch-desc')?.value || '').trim();
